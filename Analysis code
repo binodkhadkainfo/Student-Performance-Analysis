@@ -1,77 +1,412 @@
-# student_excel_analysis.py
-
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from tkinter import Tk
-from tkinter.filedialog import askopenfilename
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+import tkinter as tk
+from tkinter import filedialog, ttk, messagebox, Text
+import sys
 
-# ===========================
-# STEP 1: Load Excel File with Dialog
-# ===========================
-def load_excel_data():
-    print("📁 Please select your Excel file with student data...")
-    Tk().withdraw()  # Hide Tkinter root window
-    file_path = askopenfilename(filetypes=[("Excel Files", "*.xlsx *.xls")])
-    
+def pick_excel_file():
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    file_path = filedialog.askopenfilename(
+        title="Select Excel File",
+        filetypes=[("Excel Files", "*.xlsx *.xls")]
+    )
+    root.destroy()
     if not file_path:
-        print("❌ No file selected. Exiting.")
-        exit()
+        return None
+    return file_path
 
-    # Load Excel into DataFrame
-    df = pd.read_excel(file_path)
+def auto_detect_header(file_path, max_rows=20):
+    try:
+        for header_row in range(max_rows):
+            df = pd.read_excel(file_path, header=header_row)
+            cols = [str(c).lower() for c in df.columns]
+            if all(any(k in col for col in cols) for k in ['math', 'reading', 'writing']):
+                return df, header_row
+        return None, None
+    except Exception as e:
+        return None, str(e)
 
-    # Preview first few rows
-    print("\n✅ Data Loaded Successfully!")
-    print(df.head())
+def fix_header(df):
+    first_row = df.iloc[0]
+    if first_row.apply(lambda x: isinstance(x, str)).all():
+        new_header = first_row
+        df = df[1:]
+        df.columns = new_header
+        df = df.reset_index(drop=True)
     return df
 
-# ===========================
-# STEP 2: Analyze & Visualize
-# ===========================
-def analyze_data(df):
-    # Add average score column
+def manual_map_columns(df, root, status_label):
+    cols = list(df.columns)
+    mapping = {}
+
+    def submit_mapping():
+        mapping['math_score'] = math_var.get()
+        mapping['reading_score'] = reading_var.get()
+        mapping['writing_score'] = writing_var.get()
+        mapping['gender'] = gender_var.get()
+        mapping['study_time'] = study_time_var.get()
+        mapping['parental_education'] = parental_edu_var.get()
+        mapping_window.destroy()
+
+    mapping_window = tk.Toplevel(root)
+    mapping_window.title("Map Columns Manually")
+    mapping_window.geometry("400x300")
+    mapping_window.transient(root)
+    mapping_window.grab_set()
+
+    tk.Label(mapping_window, text="Map your columns to the expected fields:").pack(pady=5)
+    tk.Label(mapping_window, text=f"Available columns: {cols}").pack(pady=5)
+
+    math_var = tk.StringVar()
+    reading_var = tk.StringVar()
+    writing_var = tk.StringVar()
+    gender_var = tk.StringVar()
+    study_time_var = tk.StringVar()
+    parental_edu_var = tk.StringVar()
+
+    tk.Label(mapping_window, text="Math Score:").pack()
+    tk.Entry(mapping_window, textvariable=math_var).pack()
+    tk.Label(mapping_window, text="Reading Score:").pack()
+    tk.Entry(mapping_window, textvariable=reading_var).pack()
+    tk.Label(mapping_window, text="Writing Score:").pack()
+    tk.Entry(mapping_window, textvariable=writing_var).pack()
+    tk.Label(mapping_window, text="Gender:").pack()
+    tk.Entry(mapping_window, textvariable=gender_var).pack()
+    tk.Label(mapping_window, text="Study Time:").pack()
+    tk.Entry(mapping_window, textvariable=study_time_var).pack()
+    tk.Label(mapping_window, text="Parental Education:").pack()
+    tk.Entry(mapping_window, textvariable=parental_edu_var).pack()
+
+    tk.Button(mapping_window, text="Submit", command=submit_mapping).pack(pady=10)
+
+    root.wait_window(mapping_window)
+
+    if not all(mapping.values()):
+        status_label.config(text="❌ Column mapping cancelled.")
+        return None
+
+    df = df.rename(columns=mapping)
+
+    for col in ['math_score', 'reading_score', 'writing_score', 'study_time']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df.dropna(subset=['math_score', 'reading_score', 'writing_score', 'study_time'])
+    return df
+
+def auto_map_columns(df, status_label):
+    col_map = {}
+    cols_lower = {str(c).lower(): c for c in df.columns}
+
+    keywords = {
+        "math_score": ["math"],
+        "reading_score": ["reading"],
+        "writing_score": ["writing"],
+        "gender": ["gender", "sex"],
+        "study_time": ["study_time", "study time", "studytime"],
+        "parental_education": ["parental_education", "parent education", "parent_edu", "parent_education_level"]
+    }
+
+    for key, kw_list in keywords.items():
+        matched_col = None
+        for kw in kw_list:
+            for col_lower in cols_lower:
+                if kw in col_lower:
+                    matched_col = cols_lower[col_lower]
+                    break
+            if matched_col:
+                break
+        if not matched_col:
+            status_label.config(text=f"❌ Could not find a column for '{key}'.")
+            return None
+        col_map[matched_col] = key
+
+    df = df.rename(columns=col_map)
+
+    for col in ['math_score', 'reading_score', 'writing_score', 'study_time']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df.dropna(subset=['math_score', 'reading_score', 'writing_score', 'study_time'])
+
+    status_label.config(text="✅ Auto column mapping done.")
+    return df
+
+def create_plot(df, plot_type, group_by, color_palette, show_grid, show_annotations, font_size, fig_size):
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.75))
     df['average_score'] = df[['math_score', 'reading_score', 'writing_score']].mean(axis=1)
 
-    # --- Bar plot: Average score by gender
-    plt.figure(figsize=(6, 4))
-    sns.barplot(data=df, x='gender', y='average_score', estimator='mean', ci=None)
-    plt.title('Average Score by Gender')
-    plt.ylabel('Average Score')
-    plt.tight_layout()
-    plt.show()
+    if plot_type == "bar":
+        sns.barplot(data=df, x=group_by, y='average_score', ax=ax, palette=color_palette)
+        ax.set_title(f'Average Score by {group_by.replace("_", " ").title()}')
+        if group_by == "parental_education":
+            ax.tick_params(axis='x', rotation=30)
+        if show_annotations:
+            for p in ax.patches:
+                ax.annotate(f'{p.get_height():.1f}', (p.get_x() + p.get_width() / 2., p.get_height()),
+                            ha='center', va='bottom', fontsize=font_size - 2)
+    elif plot_type == "box":
+        sns.boxplot(data=df, x=group_by, y='average_score', ax=ax, palette=color_palette)
+        ax.set_title(f'Box Plot of Average Score by {group_by.replace("_", " ").title()}')
+        if group_by == "parental_education":
+            ax.tick_params(axis='x', rotation=30)
+        if show_annotations:
+            medians = df.groupby(group_by)['average_score'].median()
+            for i, median in enumerate(medians):
+                ax.text(i, median, f'{median:.1f}', ha='center', va='bottom', fontsize=font_size - 2)
+    elif plot_type == "correlation":
+        sns.heatmap(df[['math_score', 'reading_score', 'writing_score']].corr(), annot=True, cmap=color_palette, ax=ax)
+        ax.set_title('Subject Score Correlation')
 
-    # --- Bar plot: Average score by study time
-    plt.figure(figsize=(6, 4))
-    sns.barplot(data=df, x='study_time', y='average_score', estimator='mean', ci=None)
-    plt.title('Average Score by Study Time')
-    plt.ylabel('Average Score')
-    plt.xlabel('Study Time (hours)')
+    ax.set_xlabel(group_by.replace("_", " ").title(), fontsize=font_size)
+    ax.set_ylabel('Score', fontsize=font_size)
+    ax.title.set_fontsize(font_size + 2)
+    if show_grid and plot_type != "correlation":
+        ax.grid(True)
     plt.tight_layout()
-    plt.show()
+    return fig
 
-    # --- Bar plot: Average score by parental education
-    plt.figure(figsize=(8, 4))
-    sns.barplot(data=df, x='parental_education', y='average_score', estimator='mean', ci=None)
-    plt.title('Average Score by Parental Education')
-    plt.xticks(rotation=30)
-    plt.tight_layout()
-    plt.show()
+def get_stats(df, plot_type, group_by):
+    if plot_type == "correlation":
+        stats = df[['math_score', 'reading_score', 'writing_score']].describe()
+        return stats.to_string()
+    else:
+        stats = df.groupby(group_by)['average_score'].describe()[['mean', 'std', 'min', 'max', '50%']].rename(columns={'50%': 'median'})
+        return stats.to_string()
 
-    # --- Heatmap: Correlation between subjects
-    plt.figure(figsize=(5, 4))
-    corr = df[['math_score', 'reading_score', 'writing_score']].corr()
-    sns.heatmap(corr, annot=True, cmap='coolwarm')
-    plt.title('Correlation Between Subject Scores')
-    plt.tight_layout()
-    plt.show()
-
-# ===========================
-# Main Function
-# ===========================
 def main():
-    df = load_excel_data()
-    analyze_data(df)
+    root = tk.Tk()
+    root.title("Data Analysis Dashboard")
+    root.geometry("1200x800")
+
+    # Frames
+    top_control_frame = tk.Frame(root)
+    top_control_frame.pack(side=tk.TOP, pady=5, fill=tk.X)
+    filter_frame = tk.Frame(root)
+    filter_frame.pack(side=tk.TOP, pady=5, fill=tk.X)
+    plot_frame = tk.Frame(root)
+    plot_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    stats_frame = tk.Frame(root)
+    stats_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+    status_frame = tk.Frame(root)
+    status_frame.pack(side=tk.BOTTOM, pady=5)
+
+    # Status label
+    status_label = tk.Label(status_frame, text="Initializing...", font=("Arial", 10))
+    status_label.pack()
+
+    # Stats display
+    stats_text = Text(stats_frame, height=6, font=("Arial", 10))
+    stats_text.pack(fill=tk.X, padx=5)
+
+    # Variables
+    current_canvas = [None]
+    df_ref = [None]
+    show_grid = tk.BooleanVar(value=False)
+    show_annotations = tk.BooleanVar(value=False)
+    color_palette = tk.StringVar(value="viridis")
+    font_size = tk.DoubleVar(value=12)
+    fig_size = tk.DoubleVar(value=8)
+    plot_type = tk.StringVar(value="bar")
+    group_by = tk.StringVar(value="gender")
+
+    def clear_plot():
+        if current_canvas[0] is not None:
+            current_canvas[0].get_tk_widget().destroy()
+            current_canvas[0] = None
+            plt.close('all')
+
+    def show_plot():
+        if df_ref[0] is None:
+            status_label.config(text="❌ No data loaded.")
+            return
+        filtered_df = apply_filters()
+        if filtered_df.empty:
+            status_label.config(text="❌ No data after filtering.")
+            return
+        clear_plot()
+        fig = create_plot(filtered_df, plot_type.get(), group_by.get(), color_palette.get(), show_grid.get(), show_annotations.get(), font_size.get(), fig_size.get())
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(canvas, plot_frame)
+        toolbar.update()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        current_canvas[0] = canvas
+        status_label.config(text=f"Showing: {plot_type.get().title()} Plot by {group_by.get().replace('_', ' ').title()}")
+        stats_text.delete(1.0, tk.END)
+        stats_text.insert(tk.END, get_stats(filtered_df, plot_type.get(), group_by.get()))
+
+    def save_plot():
+        if current_canvas[0] is None:
+            status_label.config(text="❌ No plot to save.")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", "*.png")]
+        )
+        if file_path:
+            current_canvas[0].figure.savefig(file_path)
+            status_label.config(text="✅ Plot saved successfully.")
+
+    def export_data():
+        if df_ref[0] is None:
+            status_label.config(text="❌ No data to export.")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")]
+        )
+        if file_path:
+            df_ref[0].to_csv(file_path, index=False)
+            status_label.config(text="✅ Data exported successfully.")
+
+    def show_error_log(error_msg):
+        error_window = tk.Toplevel(root)
+        error_window.title("Error Log")
+        error_window.geometry("400x200")
+        error_window.transient(root)
+        error_window.grab_set()
+        tk.Label(error_window, text="Error Details:", font=("Arial", 12)).pack(pady=5)
+        error_text = Text(error_window, height=8, font=("Arial", 10))
+        error_text.pack(fill=tk.BOTH, padx=5, pady=5)
+        error_text.insert(tk.END, error_msg)
+        tk.Button(error_window, text="Close", command=error_window.destroy).pack(pady=5)
+
+    def apply_filters():
+        if df_ref[0] is None:
+            return pd.DataFrame()
+        df = df_ref[0].copy()
+        if gender_filter.get() != "All":
+            df = df[df['gender'] == gender_filter.get()]
+        try:
+            min_study = float(study_min.get()) if study_min.get().strip() else df['study_time'].min()
+            max_study = float(study_max.get()) if study_max.get().strip() else df['study_time'].max()
+            if min_study > max_study:
+                status_label.config(text="❌ Min study time cannot be greater than max.")
+                return pd.DataFrame()
+            df = df[(df['study_time'] >= min_study) & (df['study_time'] <= max_study)]
+        except ValueError:
+            status_label.config(text="❌ Invalid study time filter values.")
+            return pd.DataFrame()
+        if parental_filter.get() != "All":
+            df = df[df['parental_education'] == parental_filter.get()]
+        return df
+
+    def load_data():
+        clear_plot()
+        file_path = pick_excel_file()
+        if not file_path:
+            status_label.config(text="❌ No file selected.")
+            return False
+        df, header_row = auto_detect_header(file_path)
+        if df is None:
+            status_label.config(text="❌ Error loading file.")
+            show_error_log(header_row)
+            return False
+        df = fix_header(df)
+
+        def proceed_with_mapping(manual):
+            nonlocal df
+            if manual:
+                df = manual_map_columns(df, root, status_label)
+            else:
+                df = auto_map_columns(df, status_label)
+            if df is not None:
+                df_ref[0] = df
+                show_plot()
+                update_filters()
+                return True
+            return False
+
+        choice_window = tk.Toplevel(root)
+        choice_window.title("Column Mapping")
+        choice_window.geometry("300x150")
+        choice_window.transient(root)
+        choice_window.grab_set()
+
+        tk.Label(choice_window, text="Map columns manually?").pack(pady=10)
+        tk.Button(choice_window, text="Yes", command=lambda: [choice_window.destroy(), proceed_with_mapping(True)]).pack(side=tk.LEFT, padx=20)
+        tk.Button(choice_window, text="No", command=lambda: [choice_window.destroy(), proceed_with_mapping(False)]).pack(side=tk.LEFT, padx=20)
+
+        root.wait_window(choice_window)
+        return df_ref[0] is not None
+
+    def update_filters():
+        if df_ref[0] is None:
+            return
+        gender_values = ["All"] + sorted(list(df_ref[0]['gender'].unique()))
+        parental_values = ["All"] + sorted(list(df_ref[0]['parental_education'].unique()))
+        gender_filter['values'] = gender_values
+        parental_filter['values'] = parental_values
+        gender_filter.set("All")
+        parental_filter.set("All")
+        study_min.delete(0, tk.END)
+        study_max.delete(0, tk.END)
+        study_min.insert(0, str(df_ref[0]['study_time'].min()))
+        study_max.insert(0, str(df_ref[0]['study_time'].max()))
+
+    # Control elements
+    tk.Button(top_control_frame, text="Gender Plot", command=lambda: [group_by.set("gender"), plot_type.set("bar"), show_plot()]).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Study Time Plot", command=lambda: [group_by.set("study_time"), plot_type.set("bar"), show_plot()]).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Parental Education Plot", command=lambda: [group_by.set("parental_education"), plot_type.set("bar"), show_plot()]).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Correlation Heatmap", command=lambda: [plot_type.set("correlation"), group_by.set("none"), show_plot()]).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Save Plot", command=save_plot).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Export Data", command=export_data).pack(side=tk.LEFT, padx=5)
+    tk.Button(top_control_frame, text="Reset Data", command=load_data).pack(side=tk.LEFT, padx=5)
+
+    # Plot customization controls
+    tk.Label(top_control_frame, text="Plot Type:").pack(side=tk.LEFT, padx=5)
+    ttk.Combobox(top_control_frame, textvariable=plot_type, values=["bar", "box", "correlation"], state="readonly").pack(side=tk.LEFT, padx=5)
+    plot_type.trace("w", lambda name, index, mode: show_plot())
+
+    tk.Label(top_control_frame, text="Group By:").pack(side=tk.LEFT, padx=5)
+    ttk.Combobox(top_control_frame, textvariable=group_by, values=["gender", "study_time", "parental_education"], state="readonly").pack(side=tk.LEFT, padx=5)
+    group_by.trace("w", lambda name, index, mode: show_plot())
+
+    tk.Label(top_control_frame, text="Color Palette:").pack(side=tk.LEFT, padx=5)
+    ttk.Combobox(top_control_frame, textvariable=color_palette, values=["viridis", "magma", "coolwarm", "Blues"], state="readonly").pack(side=tk.LEFT, padx=5)
+    color_palette.trace("w", lambda name, index, mode: show_plot())
+
+    tk.Label(top_control_frame, text="Figure Size:").pack(side=tk.LEFT, padx=5)
+    tk.Scale(top_control_frame, from_=4, to_=12, orient=tk.HORIZONTAL, variable=fig_size, command=lambda x: show_plot()).pack(side=tk.LEFT, padx=5)
+
+    tk.Label(top_control_frame, text="Font Size:").pack(side=tk.LEFT, padx=5)
+    tk.Scale(top_control_frame, from_=8, to_=16, orient=tk.HORIZONTAL, variable=font_size, command=lambda x: show_plot()).pack(side=tk.LEFT, padx=5)
+
+    tk.Checkbutton(top_control_frame, text="Show Grid", variable=show_grid, command=show_plot).pack(side=tk.LEFT, padx=5)
+    tk.Checkbutton(top_control_frame, text="Show Annotations", variable=show_annotations, command=show_plot).pack(side=tk.LEFT, padx=5)
+
+    # Filter controls
+    tk.Label(filter_frame, text="Gender Filter:").pack(side=tk.LEFT, padx=5)
+    gender_filter = ttk.Combobox(filter_frame, state="readonly")
+    gender_filter.pack(side=tk.LEFT, padx=5)
+    gender_filter.bind("<<ComboboxSelected>>", lambda x: show_plot())
+
+    tk.Label(filter_frame, text="Study Time Min:").pack(side=tk.LEFT, padx=5)
+    study_min = tk.Entry(filter_frame, width=5)
+    study_min.pack(side=tk.LEFT, padx=5)
+    study_min.bind("<Return>", lambda x: show_plot())
+
+    tk.Label(filter_frame, text="Max:").pack(side=tk.LEFT, padx=5)
+    study_max = tk.Entry(filter_frame, width=5)
+    study_max.pack(side=tk.LEFT, padx=5)
+    study_max.bind("<Return>", lambda x: show_plot())
+
+    tk.Label(filter_frame, text="Parental Edu Filter:").pack(side=tk.LEFT, padx=5)
+    parental_filter = ttk.Combobox(filter_frame, state="readonly")
+    parental_filter.pack(side=tk.LEFT, padx=5)
+    parental_filter.bind("<<ComboboxSelected>>", lambda x: show_plot())
+
+    # Load data and show default plot
+    if load_data():
+        status_label.config(text="✅ Data loaded. Showing Bar Plot by Gender.")
+    else:
+        status_label.config(text="❌ Failed to load data.")
+
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
