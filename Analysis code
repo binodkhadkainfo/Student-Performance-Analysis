@@ -1,0 +1,77 @@
+# student_excel_analysis.py
+
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+
+# ===========================
+# STEP 1: Load Excel File with Dialog
+# ===========================
+def load_excel_data():
+    print("📁 Please select your Excel file with student data...")
+    Tk().withdraw()  # Hide Tkinter root window
+    file_path = askopenfilename(filetypes=[("Excel Files", "*.xlsx *.xls")])
+    
+    if not file_path:
+        print("❌ No file selected. Exiting.")
+        exit()
+
+    # Load Excel into DataFrame
+    df = pd.read_excel(file_path)
+
+    # Preview first few rows
+    print("\n✅ Data Loaded Successfully!")
+    print(df.head())
+    return df
+
+# ===========================
+# STEP 2: Analyze & Visualize
+# ===========================
+def analyze_data(df):
+    # Add average score column
+    df['average_score'] = df[['math_score', 'reading_score', 'writing_score']].mean(axis=1)
+
+    # --- Bar plot: Average score by gender
+    plt.figure(figsize=(6, 4))
+    sns.barplot(data=df, x='gender', y='average_score', estimator='mean', ci=None)
+    plt.title('Average Score by Gender')
+    plt.ylabel('Average Score')
+    plt.tight_layout()
+    plt.show()
+
+    # --- Bar plot: Average score by study time
+    plt.figure(figsize=(6, 4))
+    sns.barplot(data=df, x='study_time', y='average_score', estimator='mean', ci=None)
+    plt.title('Average Score by Study Time')
+    plt.ylabel('Average Score')
+    plt.xlabel('Study Time (hours)')
+    plt.tight_layout()
+    plt.show()
+
+    # --- Bar plot: Average score by parental education
+    plt.figure(figsize=(8, 4))
+    sns.barplot(data=df, x='parental_education', y='average_score', estimator='mean', ci=None)
+    plt.title('Average Score by Parental Education')
+    plt.xticks(rotation=30)
+    plt.tight_layout()
+    plt.show()
+
+    # --- Heatmap: Correlation between subjects
+    plt.figure(figsize=(5, 4))
+    corr = df[['math_score', 'reading_score', 'writing_score']].corr()
+    sns.heatmap(corr, annot=True, cmap='coolwarm')
+    plt.title('Correlation Between Subject Scores')
+    plt.tight_layout()
+    plt.show()
+
+# ===========================
+# Main Function
+# ===========================
+def main():
+    df = load_excel_data()
+    analyze_data(df)
+
+if __name__ == "__main__":
+    main()
